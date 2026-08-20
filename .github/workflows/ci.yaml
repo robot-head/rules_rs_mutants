@@ -22,7 +22,7 @@ jobs:
     env:
       USE_BAZEL_VERSION: ${{ matrix.bazel }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: bazel-contrib/setup-bazel@0.15.0
         with:
           bazelisk-cache: true
@@ -33,7 +33,7 @@ jobs:
   lint:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: bazel-contrib/setup-bazel@0.15.0
         with:
           bazelisk-cache: true

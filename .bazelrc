@@ -1,0 +1,5 @@
+# The example targets need a cargo-mutants binary; build one from //example's
+# lockfile. Consumers do the same with their own.
+common --@//mutants:cargo_mutants_binary=@mutants//:cargo-mutants__cargo-mutants
+
+try-import %workspace%/.bazelrc.user

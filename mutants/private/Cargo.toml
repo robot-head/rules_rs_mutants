@@ -1,0 +1,13 @@
+[package]
+name = "cargo_mutants_runner_deps"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Not built by cargo — this manifest exists only so `crate.from_cargo` can
+# resolve the runner's dependencies.
+[lib]
+path = "cargo_mutants_runner_deps_stub.rs"
+
+[dependencies]
+serde_json = "=1.0.149"

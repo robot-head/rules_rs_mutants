@@ -1,0 +1,31 @@
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+package(default_visibility = ["//mutants:__pkg__"])
+
+rust_binary(
+    name = "cargo_mutants_not_configured",
+    srcs = ["cargo_mutants_not_configured.rs"],
+    crate_name = "cargo_mutants_not_configured",
+    edition = "2024",
+)
+
+rust_binary(
+    name = "mutants_list",
+    srcs = ["mutants_list.rs"],
+    crate_name = "mutants_list",
+    edition = "2024",
+)
+
+rust_binary(
+    name = "cargo_mutants_runner",
+    srcs = ["cargo_mutants_runner.rs"],
+    crate_name = "cargo_mutants_runner",
+    edition = "2024",
+    deps = ["@rrsmut//:serde_json"],
+)
+
+rust_test(
+    name = "cargo_mutants_runner_test",
+    crate = ":cargo_mutants_runner",
+)

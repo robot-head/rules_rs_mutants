@@ -1,0 +1,9 @@
+package(default_visibility = ["//visibility:private"])
+
+# ponytail: a label_flag, not a toolchain — one target, no registration. Promote
+# to a cargo_mutants_toolchain if per-exec-platform binaries are ever needed.
+label_flag(
+    name = "cargo_mutants_binary",
+    build_setting_default = "//mutants/private:cargo_mutants_not_configured",
+    visibility = ["//visibility:public"],
+)

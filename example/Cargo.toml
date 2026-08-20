@@ -1,0 +1,13 @@
+[package]
+name = "mutants"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Not built by cargo — this manifest exists only to pin the `cargo-mutants`
+# binary that `//mutants:cargo_mutants_binary` points at.
+[lib]
+path = "cargo_mutants_stub.rs"
+
+[dependencies]
+cargo-mutants = "27.1.0"

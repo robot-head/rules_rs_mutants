@@ -79,7 +79,7 @@ register_toolchains(
     dev_dependency = True,
 )
 
-bazel_dep(name = "buildifier_prebuilt", version = "8.5.1.1", dev_dependency = True)
+bazel_dep(name = "buildifier_prebuilt", version = "8.5.1.3", dev_dependency = True)
 
 # A hermetic C++ toolchain, not the host one. The replay runs rustc outside of
 # a Bazel action, so it never gets the `DEVELOPER_DIR`/`SDKROOT` that Bazel's

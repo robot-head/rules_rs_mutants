@@ -15,7 +15,13 @@ Publishing needs two things set up once, by hand:
    repo, named in `publish.yaml`'s `registry_fork`.
 2. A repository secret `BCR_PUBLISH_TOKEN` holding a **fine-grained** personal
    access token, with **Repository access** limited to that one fork and
-   **Contents: read and write** on it.
+   **Contents: read and write** plus **Workflows: read and write** on it.
+
+   Scope it to the *registry fork*, not to this repository. The token's only
+   job is pushing the entry branch to the fork; the release itself runs on the
+   automatic `GITHUB_TOKEN`. Scoped to the wrong repo, the push fails with
+   `Permission to <owner>/bazel-central-registry.git denied to <owner>`, which
+   reads like an ownership problem and is not one.
 
 A fine-grained token cannot open a pull request against a public repository
 ([github/roadmap#600](https://github.com/github/roadmap/issues/600)), so

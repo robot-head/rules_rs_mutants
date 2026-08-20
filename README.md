@@ -97,6 +97,13 @@ of the sources.
   integration-test crates (`tests/*.rs` as their own targets) would need the
   whole downstream link chain replayed, not one command line.
 - Not supported on Windows.
+- **macOS needs a hermetic C++ toolchain**, such as
+  [`@llvm//toolchain:all`](https://github.com/hermeticbuild/toolchains_llvm_bootstrapped).
+  Under apple_support's Xcode `cc_wrapper.sh` the replay fails to link with
+  `Error: DEVELOPER_DIR not set`: Bazel's `XcodeLocalEnvProvider` derives that
+  variable from `APPLE_SDK_PLATFORM` when it executes an action, and a replay is
+  not an action. What gets recorded is the input to that expansion, not its
+  result.
 
 ## Attributes
 

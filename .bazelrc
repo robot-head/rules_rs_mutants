@@ -1,3 +1,7 @@
+# Keep the autodetected host C++ toolchain from outranking @llvm.
+common --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+common --repo_env=BAZEL_NO_APPLE_CPP_TOOLCHAIN=1
+
 # The example targets need a cargo-mutants binary; build one from //example's
 # lockfile. Consumers do the same with their own.
 common --@//mutants:cargo_mutants_binary=@mutants//:cargo-mutants__cargo-mutants

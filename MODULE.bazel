@@ -80,3 +80,16 @@ register_toolchains(
 )
 
 bazel_dep(name = "buildifier_prebuilt", version = "8.5.1.1", dev_dependency = True)
+
+# A hermetic C++ toolchain, not the host one. The replay runs rustc outside of
+# a Bazel action, so it never gets the `DEVELOPER_DIR`/`SDKROOT` that Bazel's
+# XcodeLocalEnvProvider injects into apple_support's `cc_wrapper.sh` at
+# execution time — under the host toolchain, linking a mutant on macOS fails
+# with `Error: DEVELOPER_DIR not set`. The llvm toolchain links with a real
+# binary and no such ambient state.
+bazel_dep(name = "llvm", version = "0.8.18", dev_dependency = True)
+
+register_toolchains(
+    "@llvm//toolchain:all",
+    dev_dependency = True,
+)

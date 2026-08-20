@@ -10,4 +10,4 @@ publish = false
 path = "cargo_mutants_runner_deps_stub.rs"
 
 [dependencies]
-serde_json = "=1.0.149"
+serde_json = "=1.0.151"

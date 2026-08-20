@@ -13,7 +13,20 @@ Publishing needs two things set up once, by hand:
 
 1. A fork of `bazelbuild/bazel-central-registry` under the same owner as this
    repo, named in `publish.yaml`'s `registry_fork`.
-2. A repository secret `BCR_PUBLISH_TOKEN` holding a **classic** personal access
-   token with `repo` and `workflow` scope. Fine-grained tokens cannot open pull
-   requests against public repositories
-   ([github/roadmap#600](https://github.com/github/roadmap/issues/600)).
+2. A repository secret `BCR_PUBLISH_TOKEN` holding a **fine-grained** personal
+   access token, with **Repository access** limited to that one fork and
+   **Contents: read and write** on it.
+
+A fine-grained token cannot open a pull request against a public repository
+([github/roadmap#600](https://github.com/github/roadmap/issues/600)), so
+`publish.yaml` sets `open_pull_request: false` and the workflow prints a URL to
+open it by hand — one click per release.
+
+The alternative the upstream README documents is a *classic* token with `repo`
+and `workflow` scope, which does open the pull request automatically. Classic
+tokens cannot be scoped to a single repository: one carries write access to
+every repository the account owns, in a public repo's Actions secrets, where
+any workflow can read it. The click is worth it. If you want the automation
+anyway, do it the way bazel-contrib does — a separate machine account holding
+the classic token, so a leak cannot reach anything of yours — and set
+`draft: false`, since a bot cannot click "Ready for review".

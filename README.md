@@ -130,8 +130,9 @@ git tag v0.0.2 && git push origin v0.0.2
 ```
 
 That runs the tests, builds the source archive, cuts the GitHub release, and
-opens a pull request against the Bazel Central Registry. The one-time token and
-registry-fork setup it needs is in [`.bcr/README.md`](.bcr/README.md).
+pushes the registry entry to the BCR fork. The job's last line is a URL to open
+the registry pull request from. The one-time token and registry-fork setup it
+needs is in [`.bcr/README.md`](.bcr/README.md).
 
 ## License
 

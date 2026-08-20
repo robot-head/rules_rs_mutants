@@ -26,7 +26,11 @@ jobs:
       tag_name: ${{ inputs.tag_name }}
       # Fork of the registry that the pull request is opened from.
       registry_fork: robot-head/bazel-central-registry
-      draft: false
+      # GitHub will not let an author review their own pull request, so for a
+      # personal account opening the entry with a personal token, clicking
+      # "Ready for review" is what signals approval to the BCR. `draft: false`
+      # is for bot/machine-user tokens, where a human could not un-draft it.
+      draft: true
       attest: true
     permissions:
       attestations: write

@@ -116,6 +116,16 @@ of the sources.
 bazel test //...
 ```
 
+## Releasing
+
+```bash
+git tag v0.0.2 && git push origin v0.0.2
+```
+
+That runs the tests, builds the source archive, cuts the GitHub release, and
+opens a pull request against the Bazel Central Registry. The one-time token and
+registry-fork setup it needs is in [`.bcr/README.md`](.bcr/README.md).
+
 ## License
 
 Apache 2.0, same as rules_rs.

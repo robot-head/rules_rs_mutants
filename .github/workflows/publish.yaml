@@ -1,0 +1,38 @@
+# Publish new releases to the Bazel Central Registry.
+name: Publish to BCR
+
+on:
+  # Triggered by release.yaml after a successful release.
+  workflow_call:
+    inputs:
+      tag_name:
+        required: true
+        type: string
+    secrets:
+      publish_token:
+        required: true
+  # In case of problems, retry by dispatching manually from the Actions tab.
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: git tag being released
+        required: true
+        type: string
+
+jobs:
+  publish:
+    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.5.0
+    with:
+      tag_name: ${{ inputs.tag_name }}
+      # Fork of the registry that the pull request is opened from.
+      registry_fork: robot-head/bazel-central-registry
+      draft: false
+      attest: true
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    secrets:
+      # Classic PAT with `repo` and `workflow` scope: needed to push to the
+      # registry fork and to open the pull request against the registry.
+      publish_token: ${{ secrets.publish_token || secrets.BCR_PUBLISH_TOKEN }}

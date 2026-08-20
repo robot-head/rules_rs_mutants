@@ -13,8 +13,16 @@ test time:
 """
 
 load("@bazel_skylib//lib:structs.bzl", "structs")
+
+# Reaching into rules_rust's internals is the whole point: the replayed command
+# line has to be the one rules_rust would have run, not an approximation of it.
+# buildifier: disable=bzl-visibility
 load("@rules_rust//rust/private:providers.bzl", "CrateInfo", "LintsInfo")
+
+# buildifier: disable=bzl-visibility
 load("@rules_rust//rust/private:rust.bzl", "get_rust_test_flags")
+
+# buildifier: disable=bzl-visibility
 load(
     "@rules_rust//rust/private:rustc.bzl",
     "collect_deps",
@@ -23,6 +31,8 @@ load(
     "get_cc_toolchain_runtime_libs",
     "resolve_cc_runtime_linkage",
 )
+
+# buildifier: disable=bzl-visibility
 load("@rules_rust//rust/private:utils.bzl", "find_cc_toolchain")
 load(":providers.bzl", "CargoMutantsInfo")
 

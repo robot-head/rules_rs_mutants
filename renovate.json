@@ -12,7 +12,8 @@
     {
       "description": "cargo-mutants' --list --json output is the integration contract; bumps need the example rerun by hand.",
       "matchFileNames": ["example/Cargo.toml", "example/Cargo.lock"],
-      "dependencyDashboardApproval": true
+      "dependencyDashboardApproval": true,
+      "automerge": true
     }
   ]
 }

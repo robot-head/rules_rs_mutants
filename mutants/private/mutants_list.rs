@@ -2,9 +2,12 @@
 //!
 //! cargo-mutants is cargo-only, but `--list` only needs `cargo metadata` to find
 //! the source files and then syn-parses them, so a synthetic dependency-free
-//! manifest is enough. Sources are copied to `<tmp>/src/<exec path>` so the
-//! `file` fields in the emitted JSON are the crate's Bazel paths with a `src/`
-//! prefix; `cargo_mutants_runner` strips that prefix back off.
+//! manifest is enough. Sources keep their Bazel exec paths inside the synthetic
+//! tree -- `<tmp>/<exec path>`, with `[lib] path` pointing straight at the crate
+//! root -- so the `file` fields in the emitted JSON are the paths the workspace
+//! already uses. That is what makes a config file portable: `exclude_globs` in
+//! `.cargo/mutants.toml` matches the same paths under Bazel as it does under a
+//! plain `cargo mutants` run, and as the reported results print.
 
 use std::env;
 use std::fs;
@@ -19,6 +22,7 @@ struct Args {
     crate_root: PathBuf,
     output: PathBuf,
     srcs: Vec<PathBuf>,
+    config: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -29,6 +33,7 @@ fn parse_args() -> Result<Args, String> {
     let mut crate_root = None;
     let mut output = None;
     let mut srcs = Vec::new();
+    let mut config = None;
 
     let mut argv = env::args().skip(1);
     while let Some(flag) = argv.next() {
@@ -43,6 +48,7 @@ fn parse_args() -> Result<Args, String> {
             "--crate-root" => crate_root = Some(PathBuf::from(value)),
             "--output" => output = Some(PathBuf::from(value)),
             "--src" => srcs.push(PathBuf::from(value)),
+            "--config" => config = Some(PathBuf::from(value)),
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -55,6 +61,7 @@ fn parse_args() -> Result<Args, String> {
         crate_root: crate_root.ok_or("missing --crate-root")?,
         output: output.ok_or("missing --output")?,
         srcs,
+        config,
     })
 }
 
@@ -64,7 +71,7 @@ fn absolute(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn copy_into(root: &Path, src: &Path) -> Result<(), String> {
-    let dest = root.join("src").join(src);
+    let dest = root.join(src);
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)
             .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
@@ -88,7 +95,7 @@ fn write_manifest(root: &Path, args: &Args) -> Result<(), String> {
          edition = \"{edition}\"\n\n\
          [lib]\n\
          name = \"{name}\"\n\
-         path = \"src/{root_path}\"\n\
+         path = \"{root_path}\"\n\
          doctest = false\n\n\
          [dependencies]\n",
         name = args.crate_name,
@@ -132,8 +139,14 @@ fn run() -> Result<(), String> {
 
     // The `mutants` token is required: cargo-mutants' CLI is declared with
     // bin_name = "cargo", so it expects to be invoked as `cargo mutants`.
-    let out = Command::new(&cargo_mutants)
-        .args(["mutants", "--list", "--json"])
+    // `--config` rather than a copy into `<root>/.cargo/mutants.toml`: the file
+    // is a Bazel input, so pointing at it keeps one copy and one source of truth.
+    let mut command = Command::new(&cargo_mutants);
+    command.args(["mutants", "--list", "--json"]);
+    if let Some(config) = &args.config {
+        command.arg("--config").arg(absolute(config)?);
+    }
+    let out = command
         .current_dir(&root)
         .env("CARGO", &cargo)
         .env("PATH", path)

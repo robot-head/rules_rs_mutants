@@ -1,0 +1,5 @@
+# The default value of `//mutants:config`: a config that configures nothing.
+#
+# The flag always has a value so the lister's command line has one shape, and
+# cargo-mutants reading an empty file is the same as reading no file at all.
+# Point the flag at your workspace's own `.cargo/mutants.toml` to replace it.

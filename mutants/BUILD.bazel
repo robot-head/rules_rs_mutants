@@ -7,3 +7,20 @@ label_flag(
     build_setting_default = "//mutants/private:cargo_mutants_not_configured",
     visibility = ["//visibility:public"],
 )
+
+# The cargo-mutants config file, as `--config` to the enumeration step.
+#
+# Without it the sweep silently ran unconfigured: the lister builds a synthetic
+# workspace in a temp dir, so a `.cargo/mutants.toml` sitting in the real
+# workspace was never in scope, and `exclude_globs` written there did not
+# exclude. Set it to your own file:
+#
+#     build --@rules_rs_mutants//mutants:config=//:mutants_config
+#
+# Paths in it match the workspace, not the synthetic tree -- the same paths the
+# results print -- so one file serves both Bazel and a plain `cargo mutants`.
+label_flag(
+    name = "config",
+    build_setting_default = "//mutants/private:empty_mutants.toml",
+    visibility = ["//visibility:public"],
+)

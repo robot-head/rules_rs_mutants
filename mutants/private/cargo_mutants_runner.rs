@@ -372,11 +372,11 @@ fn evaluate(
     mutant: &serde_json::Value,
     timeout: Duration,
 ) -> Result<Outcome, String> {
-    // `mutants_list` copies sources to `<tree>/src/<exec path>`.
+    // `mutants_list` keeps Bazel exec paths inside its synthetic tree, so a
+    // mutant's `file` is already the path this scratch tree uses.
     let file = mutant["file"]
         .as_str()
-        .and_then(|f| f.strip_prefix("src/"))
-        .ok_or_else(|| format!("mutant has no `src/`-relative file field: {mutant}"))?;
+        .ok_or_else(|| format!("mutant has no file field: {mutant}"))?;
     let replacement = mutant["replacement"]
         .as_str()
         .ok_or_else(|| format!("mutant has no replacement: {mutant}"))?;

@@ -4,6 +4,8 @@ load("//mutants:cargo_mutants_test.bzl", "cargo_mutants_test")
 
 package(default_visibility = ["//visibility:public"])
 
+exports_files(["mutants_config.toml"])
+
 NOT_WINDOWS = select({
     "@platforms//os:windows": ["@platforms//:incompatible"],
     "//conditions:default": [],

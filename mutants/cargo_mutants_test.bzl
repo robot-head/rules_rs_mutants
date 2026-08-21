@@ -53,6 +53,14 @@ def _cargo_mutants_test_impl(ctx):
         ),
     ]
 
+# Configuration comes from `//mutants:config`, a label_flag pointing at a
+# cargo-mutants config file (`exclude_globs`, `exclude_re`, and the rest):
+#
+#     build --@rules_rs_mutants//mutants:config=//:mutants_config
+#
+# Paths inside it are workspace paths -- the ones the results print -- so the
+# same file serves a plain `cargo mutants` run.
+
 cargo_mutants_test = rule(
     implementation = _cargo_mutants_test_impl,
     doc = """Rebuilds and re-runs a `rust_test` target once per mutant.

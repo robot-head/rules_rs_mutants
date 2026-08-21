@@ -3,6 +3,8 @@ load("@rules_rs//rs:rust_test.bzl", "rust_test")
 
 package(default_visibility = ["//mutants:__pkg__"])
 
+exports_files(["empty_mutants.toml"])
+
 rust_binary(
     name = "cargo_mutants_not_configured",
     srcs = ["cargo_mutants_not_configured.rs"],

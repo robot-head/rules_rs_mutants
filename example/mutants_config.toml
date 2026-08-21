@@ -1,0 +1,10 @@
+# Proves `//mutants:config` reaches the enumeration step.
+#
+# `under_tested.rs` has an uncovered function, so //example:under_tested_mutants
+# fails by design. Excluding the file leaves nothing to mutate, so the same
+# target passes when this config is in force -- a difference that can only come
+# from the config being read.
+#
+# The path is the workspace path, not one relative to the synthetic tree the
+# lister builds.
+exclude_globs = ["example/under_tested.rs"]

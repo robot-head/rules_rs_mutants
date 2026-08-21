@@ -30,6 +30,16 @@ jobs:
           repository-cache: true
       - run: bazel test --test_output=errors //...
 
+      # `//mutants:config` reaching the enumeration step is only observable as a
+      # change in outcome, so assert the change. `under_tested_mutants` fails by
+      # design; excluding its one file leaves nothing to mutate, and it passes.
+      # Before the flag existed a config was silently ignored, which looked
+      # exactly like a config that excluded nothing.
+      - name: config flag is honoured
+        run: |
+          bazel test --test_output=errors //example:under_tested_mutants \
+            --@//mutants:config=//example:mutants_config.toml
+
   lint:
     runs-on: ubuntu-24.04
     steps:

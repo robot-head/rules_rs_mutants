@@ -53,11 +53,12 @@ def _enumerate(ctx, crate, toolchain):
     args.add("--crate-root", crate.root)
     args.add("--output", output)
     args.add_all(crate.srcs, before_each = "--src")
+    args.add("--config", ctx.file._config)
 
     ctx.actions.run(
         executable = ctx.executable._lister,
         arguments = [args],
-        inputs = depset([toolchain.cargo], transitive = [crate.srcs]),
+        inputs = depset([toolchain.cargo, ctx.file._config], transitive = [crate.srcs]),
         tools = [ctx.executable._cargo_mutants],
         outputs = [output],
         mnemonic = "CargoMutantsList",
@@ -212,6 +213,10 @@ cargo_mutants_aspect = aspect(
             default = Label("//mutants:cargo_mutants_binary"),
             executable = True,
             cfg = "exec",
+        ),
+        "_config": attr.label(
+            default = Label("//mutants:config"),
+            allow_single_file = True,
         ),
         "_lister": attr.label(
             default = Label("//mutants/private:mutants_list"),

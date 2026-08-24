@@ -34,10 +34,21 @@ def _cargo_mutants_test_impl(ctx):
     # Only when a suite needs it: passing it otherwise would rebuild the rlib
     # for every mutant, and a failure in that unused build would be reported as
     # the mutant being unviable -- changing unit-only results for no reason.
+    # One file rather than a flag pair per suite: the launcher stub embeds at
+    # most ten arguments, which a crate with more than one integration suite
+    # would otherwise exceed -- and it fails at build time with a message that
+    # says nothing about suites.
+    extras = None
     if integration:
-        embedded_args.extend(["--library-replay", library.manifest.path])
-    for replay in integration:
-        embedded_args.extend(["--integration-replay", replay.manifest.path])
+        extras = ctx.actions.declare_file(ctx.label.name + ".mutants.extras")
+        ctx.actions.write(
+            extras,
+            "\n".join(
+                ["--library-replay", library.manifest.path] +
+                [line for replay in integration for line in ["--integration-replay", replay.manifest.path]],
+            ) + "\n",
+        )
+        embedded_args.extend(["--extras", extras.path])
 
     executable = _declare_test_executable(ctx)
     launcher.compile_stub(
@@ -52,6 +63,9 @@ def _cargo_mutants_test_impl(ctx):
     runfiles = ctx.runfiles(
         files = [ctx.executable._runner] + ctx.files.data,
         root_symlinks = {
+            file.path: file
+            for file in ([extras] if extras else [])
+        } | {
             file.path: file
             for replay in [info] + ([library] if library else []) + integration
             for file in replay.inputs.to_list()

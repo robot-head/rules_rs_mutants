@@ -103,10 +103,22 @@ rust_test(
     deps = [":integration_covered"],
 )
 
+rust_test(
+    name = "integration_covered_second_suite",
+    srcs = ["integration_covered_second_test.rs"],
+    edition = "2024",
+    deps = [":integration_covered"],
+)
+
 cargo_mutants_test(
     name = "integration_covered_mutants",
     timeout = "long",
-    integration_tests = [":integration_covered_suite"],
+    # Two suites, not one: a flag pair per suite overflowed the launcher stub's
+    # ten-argument limit at exactly two, so one suite would not catch it.
+    integration_tests = [
+        ":integration_covered_second_suite",
+        ":integration_covered_suite",
+    ],
     library = ":integration_covered",
     target_compatible_with = NOT_WINDOWS,
     test = ":integration_covered_unit_test",

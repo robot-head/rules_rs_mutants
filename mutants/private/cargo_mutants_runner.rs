@@ -192,9 +192,24 @@ fn parse_manifest() -> Result<Manifest, String> {
                     .parse()
                     .map_err(|err| format!("bad --jobs {value}: {err}"))?
             }
-            "--library-replay" => library = Some(parse_replay_manifest(Path::new(&value))?),
-            "--integration-replay" => {
-                integration.push(parse_replay_manifest(Path::new(&value))?)
+            // One file listing the replay manifests, rather than a flag pair
+            // per suite: the launcher stub embeds at most ten arguments.
+            "--extras" => {
+                let mut lines = read_lines(Path::new(&value))?.into_iter();
+                while let Some(flag) = lines.next() {
+                    let path = lines
+                        .next()
+                        .ok_or_else(|| format!("missing value for {flag} in {value}"))?;
+                    match flag.as_str() {
+                        "--library-replay" => {
+                            library = Some(parse_replay_manifest(Path::new(&path))?)
+                        }
+                        "--integration-replay" => {
+                            integration.push(parse_replay_manifest(Path::new(&path))?)
+                        }
+                        other => return Err(format!("unknown flag {other} in {value}")),
+                    }
+                }
             }
             other => return Err(format!("unknown flag {other}")),
         }

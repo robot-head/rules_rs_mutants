@@ -33,7 +33,7 @@ schema is the integration contract here, and it carries no stability guarantee.
 ```bzl
 # MODULE.bazel
 bazel_dep(name = "rules_rs", version = "0.0.106")
-bazel_dep(name = "rules_rs_mutants", version = "0.0.1")
+bazel_dep(name = "rules_rs_mutants", version = "0.1.0")
 ```
 
 Bring your own `cargo-mutants` binary. It is used only to enumerate mutants, so
@@ -91,11 +91,39 @@ by calling rules_rust's own `construct_arguments`; the runner replays it once
 per mutant from the runfiles tree, patching the mutated span into a scratch copy
 of the sources.
 
+## Integration tests
+
+A crate whose real coverage lives in `tests/` reports almost every mutant as
+missed unless those suites are rebuilt too. Name the library they link and the
+suites themselves:
+
+```python
+cargo_mutants_test(
+    name = "logql_mutants",
+    test = ":logql_test",
+    library = ":logql",
+    integration_tests = [":parser_test", ":planner_test"],
+)
+```
+
+Each mutant then rebuilds the library as an rlib, relinks every listed suite
+against it, and runs them in order, stopping at the first failure -- most
+mutants die in the unit tests, and running the rest only to confirm costs the
+whole matrix per mutant.
+
+The difference is not marginal. `crabka-logql`'s parser is covered entirely from
+`tests/`, and its `syntax.rs` reports **165 survivors** on unit tests alone
+against **1** when the suites are included.
+
+Suites are listed rather than discovered, so a suite that needs a container or a
+network fixture is not pulled into the sweep by accident, and the cost of adding
+one is visible where it is added.
+
 ## Limits
 
-- Only the target's own `#[cfg(test)]` tests run against each mutant. Separate
-  integration-test crates (`tests/*.rs` as their own targets) would need the
-  whole downstream link chain replayed, not one command line.
+- Suites under `tests/` are run only when named. By default a mutant faces the
+  target's own `#[cfg(test)]` tests and nothing else; see
+  [Integration tests](#integration-tests).
 - Not supported on Windows.
 - **macOS needs a hermetic C++ toolchain**, such as
   [`@llvm//toolchain:all`](https://github.com/hermeticbuild/toolchains_llvm_bootstrapped).

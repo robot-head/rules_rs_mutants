@@ -1,6 +1,6 @@
 module(
     name = "rules_rs_mutants",
-    version = "0.0.1",
+    version = "0.1.0",
     bazel_compatibility = [">=7.7.0"],
 )
 

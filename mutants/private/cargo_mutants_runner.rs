@@ -59,6 +59,71 @@ fn span_replace(
     out
 }
 
+/// One recorded rustc command, replayed against the mutated tree. The library
+/// under mutation is rebuilt as an rlib from this, and each integration binary
+/// is relinked against that rlib.
+struct ReplayManifest {
+    process_wrapper: PathBuf,
+    rustc_args: Vec<PathBuf>,
+    env: PathBuf,
+    crate_root: String,
+    output: String,
+    srcs: Vec<PathBuf>,
+    compile_data: Vec<PathBuf>,
+    test_args: Vec<String>,
+    test_env: Vec<(String, String)>,
+}
+
+fn parse_replay_manifest(path: &Path) -> Result<ReplayManifest, String> {
+    let text = fs::read_to_string(path)
+        .map_err(|err| format!("failed to read replay manifest {}: {err}", path.display()))?;
+    let mut process_wrapper = None;
+    let mut rustc_args = Vec::new();
+    let mut env_file = None;
+    let mut crate_root = None;
+    let mut output = None;
+    let mut srcs = Vec::new();
+    let mut compile_data = Vec::new();
+    let mut test_args = Vec::new();
+    let mut test_env = Vec::new();
+
+    let mut lines = text.lines();
+    while let Some(flag) = lines.next() {
+        let value = lines
+            .next()
+            .ok_or_else(|| format!("missing value for {flag} in {}", path.display()))?;
+        match flag {
+            "--process-wrapper" => process_wrapper = Some(PathBuf::from(value)),
+            "--rustc-args" => rustc_args.push(PathBuf::from(value)),
+            "--env" => env_file = Some(PathBuf::from(value)),
+            "--crate-root" => crate_root = Some(value.to_owned()),
+            "--output" => output = Some(value.to_owned()),
+            "--src" => srcs.push(PathBuf::from(value)),
+            "--compile-data" => compile_data.push(PathBuf::from(value)),
+            "--test-arg" => test_args.push(value.to_owned()),
+            "--test-env" => {
+                let (key, value) = value
+                    .split_once('=')
+                    .ok_or_else(|| format!("malformed --test-env {value:?}"))?;
+                test_env.push((key.to_owned(), value.to_owned()));
+            }
+            other => return Err(format!("unknown flag {other} in {}", path.display())),
+        }
+    }
+
+    Ok(ReplayManifest {
+        process_wrapper: process_wrapper.ok_or("missing --process-wrapper")?,
+        rustc_args,
+        env: env_file.ok_or("missing --env")?,
+        crate_root: crate_root.ok_or("missing --crate-root")?,
+        output: output.ok_or("missing --output")?,
+        srcs,
+        compile_data,
+        test_args,
+        test_env,
+    })
+}
+
 struct Manifest {
     process_wrapper: PathBuf,
     mutants: PathBuf,
@@ -71,6 +136,8 @@ struct Manifest {
     test_args: Vec<String>,
     timeout_multiplier: u32,
     jobs: usize,
+    library: Option<ReplayManifest>,
+    integration: Vec<ReplayManifest>,
 }
 
 fn parse_manifest() -> Result<Manifest, String> {
@@ -97,6 +164,8 @@ fn parse_manifest() -> Result<Manifest, String> {
     let mut test_args = Vec::new();
     let mut timeout_multiplier = 5;
     let mut jobs = 1;
+    let mut library = None;
+    let mut integration = Vec::new();
 
     let mut argv = argv.into_iter();
     while let Some(flag) = argv.next() {
@@ -123,6 +192,10 @@ fn parse_manifest() -> Result<Manifest, String> {
                     .parse()
                     .map_err(|err| format!("bad --jobs {value}: {err}"))?
             }
+            "--library-replay" => library = Some(parse_replay_manifest(Path::new(&value))?),
+            "--integration-replay" => {
+                integration.push(parse_replay_manifest(Path::new(&value))?)
+            }
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -139,6 +212,8 @@ fn parse_manifest() -> Result<Manifest, String> {
         test_args,
         timeout_multiplier: timeout_multiplier.max(1),
         jobs: jobs.max(1),
+        library,
+        integration,
     })
 }
 
@@ -228,11 +303,15 @@ fn wait_with_timeout(mut child: Child, timeout: Duration) -> Result<Option<i32>,
 }
 
 struct Replay {
+    /// False for the library stage: it produces an rlib for the integration
+    /// binaries to link, and there is nothing to execute.
+    runnable: bool,
     process_wrapper: PathBuf,
     argv: Vec<String>,
     env: Vec<(String, String)>,
     binary: PathBuf,
     test_args: Vec<String>,
+    test_env: Vec<(String, String)>,
     test_working_dir: PathBuf,
 }
 
@@ -257,6 +336,7 @@ impl Replay {
     fn run_tests(&self, timeout: Duration) -> Result<Option<i32>, String> {
         let child = Command::new(&self.binary)
             .args(&self.test_args)
+            .envs(self.test_env.iter().map(|(key, value)| (key, value)))
             .current_dir(&self.test_working_dir)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -356,6 +436,8 @@ fn prepare(
         argv.push(substitute(&arg, &manifest.crate_root, &crate_root));
     }
     Ok(Replay {
+        runnable: true,
+        test_env: Vec::new(),
         process_wrapper: manifest.process_wrapper.clone(),
         argv,
         env: environment.to_vec(),
@@ -365,8 +447,106 @@ fn prepare(
     })
 }
 
+/// Loads one recorded rustc command, redirected into `scratch`.
+///
+/// `relink` is the library's original rlib path paired with the one this
+/// scratch tree builds. Every recorded `--extern name=<original>` is rewritten
+/// to the scratch copy; without that the integration binaries would link the
+/// *unmutated* library and report every mutant as caught, which is worse than
+/// not running them at all.
+fn prepare_replay(
+    scratch: &Path,
+    replay: &ReplayManifest,
+    runfiles_cwd: &str,
+    originals: &BTreeMap<PathBuf, String>,
+    test_working_dir: &Path,
+    relink: Option<(&str, &Path)>,
+) -> Result<Replay, String> {
+    for src in &replay.srcs {
+        // Sources of the crate under mutation are already in scratch and must
+        // not be overwritten with their originals; anything else is this
+        // target's own and has to be copied in.
+        if !originals.contains_key(src) {
+            copy(src, &scratch.join(src))?;
+        }
+    }
+    for data in &replay.compile_data {
+        if !originals.contains_key(data) {
+            copy(data, &scratch.join(data))?;
+        }
+    }
+
+    let mut args = Vec::new();
+    for args_file in &replay.rustc_args {
+        args.extend(read_lines(args_file)?);
+    }
+    let mut environment: Vec<(String, String)> = Vec::new();
+    for line in read_lines(&replay.env)? {
+        let (key, value) = line
+            .split_once('=')
+            .ok_or_else(|| format!("malformed env entry {line:?}"))?;
+        let value = value
+            .replace("${pwd}", runfiles_cwd)
+            .replace("${exec_root}", runfiles_cwd)
+            .replace("${output_base}", runfiles_cwd);
+        environment.push((key.to_owned(), value));
+    }
+    for key in ["PATH", "HOME", "SYSTEMROOT", "TMPDIR", "TEST_TMPDIR"] {
+        if let Some(value) = env::var_os(key) {
+            environment.push((key.to_owned(), value.to_string_lossy().into_owned()));
+        }
+    }
+
+    let crate_root = scratch.join(&replay.crate_root);
+    let output = scratch.join(&replay.output);
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+    }
+
+    // A library is written by `--out-dir` plus the crate name, so rustc names
+    // it `libfoo.rlib` while Bazel declared `libfoo-1234.rlib` and the extern
+    // that links it names the hash. Pin the path with `-o` instead of letting
+    // rustc derive it, so the two agree.
+    let needs_explicit_output = !args.iter().any(|arg| arg == "-o" || arg.starts_with("-o="))
+        && args.iter().any(|arg| arg.starts_with("--crate-type=rlib"));
+
+    let mut argv = Vec::with_capacity(args.len() + 2);
+    for arg in &args {
+        if let Some(dir) = arg.strip_prefix("--out-dir=") {
+            let dir = scratch.join(dir);
+            fs::create_dir_all(&dir)
+                .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
+            argv.push(format!("--out-dir={}", dir.display()));
+            continue;
+        }
+        let arg = substitute(arg, &replay.output, &output);
+        let arg = substitute(&arg, &replay.crate_root, &crate_root);
+        argv.push(match relink {
+            Some((from, to)) => substitute(&arg, from, to),
+            None => arg,
+        });
+    }
+    if needs_explicit_output {
+        argv.push("-o".to_owned());
+        argv.push(output.display().to_string());
+    }
+
+    Ok(Replay {
+        runnable: relink.is_some(),
+        test_env: replay.test_env.clone(),
+        process_wrapper: replay.process_wrapper.clone(),
+        argv,
+        env: environment,
+        binary: output,
+        test_args: replay.test_args.clone(),
+        test_working_dir: test_working_dir.to_path_buf(),
+    })
+}
+
 fn evaluate(
     replay: &Replay,
+    extra: &[Replay],
     scratch: &Path,
     originals: &BTreeMap<PathBuf, String>,
     mutant: &serde_json::Value,
@@ -395,21 +575,41 @@ fn evaluate(
     let path = scratch.join(file);
     write(&path, &span_replace(source, start, end, replacement))?;
     let built = replay.build()?;
+    // Each extra stage links the mutated rlib, so all of them have to be built
+    // while the mutated source is still on disk.
+    let extra_built = if built.is_ok() {
+        extra.iter().map(Replay::build).collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
     write(&path, source)?;
 
     if built.is_err() {
         return Ok(Outcome::Unviable);
     }
-    if replay.run_tests(timeout)? == Some(0) {
-        Ok(Outcome::Missed(format!(
-            "{file}:{}:{}: replace {} with {replacement}",
-            start.0,
-            start.1,
-            mutant["function"]["function_name"].as_str().unwrap_or("?"),
-        )))
-    } else {
-        Ok(Outcome::Caught)
+    // A stage that fails to compile against the mutated library is unviable in
+    // the same sense the primary build is: the mutant never produced a program
+    // to run, so it says nothing about the tests.
+    if extra_built.iter().any(Result::is_err) {
+        return Ok(Outcome::Unviable);
     }
+    // The unit tests run first and the suites only if they pass: most mutants
+    // die in the unit tests, and reaching for a suite costs a whole extra run.
+    if replay.run_tests(timeout)? != Some(0) {
+        return Ok(Outcome::Caught);
+    }
+    for stage in extra.iter().filter(|stage| stage.runnable) {
+        if stage.run_tests(timeout)? != Some(0) {
+            return Ok(Outcome::Caught);
+        }
+    }
+    // Nothing failed, so nothing noticed the change.
+    Ok(Outcome::Missed(format!(
+        "{file}:{}:{}: replace {} with {replacement}",
+        start.0,
+        start.1,
+        mutant["function"]["function_name"].as_str().unwrap_or("?"),
+    )))
 }
 
 fn run() -> Result<(), String> {
@@ -488,6 +688,37 @@ fn run() -> Result<(), String> {
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    // Per job: the mutated library as an rlib, then every integration binary
+    // relinked against it. Empty unless `integration_tests` was set.
+    let extras: Vec<Vec<Replay>> = scratches
+        .iter()
+        .map(|scratch| -> Result<Vec<Replay>, String> {
+            let Some(library) = &manifest.library else {
+                return Ok(Vec::new());
+            };
+            let mut stages = vec![prepare_replay(
+                scratch,
+                library,
+                &cwd,
+                &originals,
+                &test_working_dir,
+                None,
+            )?];
+            let rlib = scratch.join(&library.output);
+            for test in &manifest.integration {
+                stages.push(prepare_replay(
+                    scratch,
+                    test,
+                    &cwd,
+                    &originals,
+                    &test_working_dir,
+                    Some((library.output.as_str(), rlib.as_path())),
+                )?);
+            }
+            Ok(stages)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
     if let Err(stderr) = replays[0].build()? {
         return Err(format!("the unmutated crate failed to build:\n{stderr}"));
     }
@@ -496,13 +727,43 @@ fn run() -> Result<(), String> {
         Some(0) => {}
         _ => return Err("the unmutated tests do not pass; fix them first".to_owned()),
     }
-    let timeout = (started.elapsed() * manifest.timeout_multiplier).max(MIN_TIMEOUT);
+    let mut baseline = started.elapsed();
+
+    // Every integration stage is built, and every runnable one is also run
+    // unmutated. Both halves matter. A suite that already fails would fail
+    // against every mutant too, and each would be recorded as caught -- a
+    // perfect score reported by a broken sweep. And the timeout is derived from
+    // the slowest baseline rather than the unit binary's alone, because a suite
+    // that legitimately runs longer than the unit tests would otherwise be
+    // killed on every mutant and counted as catching it.
+    for stage in extras.first().into_iter().flatten() {
+        if let Err(stderr) = stage.build()? {
+            return Err(format!(
+                "an unmutated integration stage failed to build:\n{stderr}"
+            ));
+        }
+        if !stage.runnable {
+            continue;
+        }
+        let started = Instant::now();
+        match stage.run_tests(BASELINE_TIMEOUT)? {
+            Some(0) => {}
+            _ => {
+                return Err(format!(
+                    "the unmutated integration suite {} does not pass; fix it first",
+                    stage.binary.display()
+                ));
+            }
+        }
+        baseline = baseline.max(started.elapsed());
+    }
+    let timeout = (baseline * manifest.timeout_multiplier).max(MIN_TIMEOUT);
 
     let next = AtomicUsize::new(0);
     let outcomes: Mutex<Vec<Outcome>> = Mutex::new(Vec::new());
     let failure: Mutex<Option<String>> = Mutex::new(None);
     std::thread::scope(|scope| {
-        for (replay, scratch) in replays.iter().zip(&scratches) {
+        for ((replay, extra), scratch) in replays.iter().zip(&extras).zip(&scratches) {
             let (next, outcomes, failure) = (&next, &outcomes, &failure);
             let (work, originals) = (&work, &originals);
             scope.spawn(move || {
@@ -510,7 +771,7 @@ fn run() -> Result<(), String> {
                     let Some(mutant) = work.get(next.fetch_add(1, Ordering::Relaxed)) else {
                         break;
                     };
-                    match evaluate(replay, scratch, originals, mutant, timeout) {
+                    match evaluate(replay, extra, scratch, originals, mutant, timeout) {
                         Ok(outcome) => outcomes.lock().unwrap().push(outcome),
                         Err(err) => *failure.lock().unwrap() = Some(err),
                     }

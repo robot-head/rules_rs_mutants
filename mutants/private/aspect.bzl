@@ -34,7 +34,7 @@ load(
 
 # buildifier: disable=bzl-visibility
 load("@rules_rust//rust/private:utils.bzl", "find_cc_toolchain")
-load(":providers.bzl", "CargoMutantsInfo")
+load(":providers.bzl", "CargoMutantsInfo", "CargoMutantsReplayInfo")
 
 RUST_TOOLCHAIN_TYPE = "@rules_rust//rust:toolchain_type"
 CPP_TOOLCHAIN_TYPE = "@bazel_tools//tools/cpp:toolchain_type"
@@ -93,8 +93,10 @@ def _record_rustc(ctx, crate, toolchain):
         resolve_cc_runtime_linkage(ctx),
     )
 
-    # `--test` comes from here, not from crate.is_test.
-    rust_flags = get_rust_test_flags(attr)
+    # `--test` comes from here, not from crate.is_test -- but only for a test
+    # target. Asking for it while recording a library would compile the rlib as
+    # a test binary, which then fails to link for want of an unwinder.
+    rust_flags = get_rust_test_flags(attr) if crate.is_test else []
     lint_files = []
     if getattr(attr, "lint_config", None):
         rust_flags = rust_flags + attr.lint_config[LintsInfo].rustc_lint_flags
@@ -133,7 +135,7 @@ def _record_rustc(ctx, crate, toolchain):
         build_env_files = build_env_files,
         build_flags_files = build_flags_files,
         emit = ["link"],
-        add_flags_for_binary = True,
+        add_flags_for_binary = crate.is_test,
         runtime_libs = runtime_libs,
         # rustc_env is already expanded by the rule; re-expanding chokes on the
         # `${pwd}` placeholders process_wrapper resolves at execution time.
@@ -172,15 +174,44 @@ def _write_manifest(ctx, crate, toolchain, mutants_json, args_files, env_file):
     ctx.actions.write(out, args)
     return out
 
-def _cargo_mutants_aspect_impl(target, ctx):
-    if CrateInfo not in target:
-        return []
-    crate = target[CrateInfo]
-    if not crate.is_test:
-        return []
+def _write_replay_manifest(ctx, crate, toolchain, args_files, env_file):
+    out = ctx.actions.declare_file(ctx.label.name + ".mutants.replay")
+    args = ctx.actions.args()
+    args.set_param_file_format("multiline")
+    args.add("--process-wrapper", toolchain.process_wrapper)
+    args.add_all(args_files, before_each = "--rustc-args")
+    args.add("--env", env_file)
+    args.add("--crate-root", crate.root)
+    args.add("--output", crate.output)
+    args.add_all(crate.srcs, before_each = "--src")
+    args.add_all(crate.compile_data, before_each = "--compile-data")
+    args.add_all(
+        [ctx.expand_location(arg, targets = getattr(ctx.rule.attr, "data", [])) for arg in getattr(ctx.rule.attr, "args", [])],
+        before_each = "--test-arg",
+    )
 
-    toolchain = ctx.toolchains[RUST_TOOLCHAIN_TYPE]
-    mutants_json = _enumerate(ctx, crate, toolchain)
+    # A suite's own `env`. The runner spawns it as a child of a process holding
+    # the *primary* test's environment, so without this a suite that needs a
+    # variable runs without it and fails against every mutant -- each of which
+    # would then be recorded as caught.
+    run_env = target_run_env(ctx)
+    args.add_all(
+        ["{}={}".format(key, run_env[key]) for key in sorted(run_env)],
+        before_each = "--test-env",
+    )
+    ctx.actions.write(out, args)
+    return out
+
+def target_run_env(ctx):
+    """The `env` a test rule declares, expanded the way the rule itself does."""
+    data = getattr(ctx.rule.attr, "data", [])
+    return {
+        key: ctx.expand_location(value, targets = data)
+        for key, value in getattr(ctx.rule.attr, "env", {}).items()
+    }
+
+def _record(ctx, crate, toolchain):
+    """The rustc command line for `crate`, split into the files the replay reads."""
     args, env, compile_inputs = _record_rustc(ctx, _replayable_crate_info(crate), toolchain)
 
     # construct_arguments already formats rustc_flags; setting it twice fails.
@@ -188,17 +219,49 @@ def _cargo_mutants_aspect_impl(target, ctx):
         _write_args(ctx, index, arg, arg != args.rustc_flags)
         for index, arg in enumerate(args.all)
     ]
-    env_file = _write_env(ctx, env)
+    return args_files, _write_env(ctx, env), compile_inputs
+
+def _cargo_mutants_aspect_impl(target, ctx):
+    if CrateInfo not in target:
+        return []
+    crate = target[CrateInfo]
+    toolchain = ctx.toolchains[RUST_TOOLCHAIN_TYPE]
+
+    # A library reached through a test's `crate`/`deps` is not mutated for its
+    # own sake; its build is recorded so an integration test can be relinked
+    # against a mutated rlib. Enumerating mutants for it would be wasted work.
+    if not crate.is_test:
+        args_files, env_file, compile_inputs = _record(ctx, crate, toolchain)
+        replay_manifest = _write_replay_manifest(ctx, crate, toolchain, args_files, env_file)
+        return [CargoMutantsReplayInfo(
+            manifest = replay_manifest,
+            inputs = depset(
+                [replay_manifest, env_file, toolchain.process_wrapper] + args_files,
+                transitive = [compile_inputs, crate.srcs, crate.compile_data],
+            ),
+        )]
+
+    mutants_json = _enumerate(ctx, crate, toolchain)
+    args_files, env_file, compile_inputs = _record(ctx, crate, toolchain)
     manifest = _write_manifest(ctx, crate, toolchain, mutants_json, args_files, env_file)
 
+    replay_manifest = _write_replay_manifest(ctx, crate, toolchain, args_files, env_file)
+    inputs = depset(
+        [mutants_json, manifest, replay_manifest, env_file, toolchain.process_wrapper] + args_files,
+        transitive = [compile_inputs, crate.srcs, crate.compile_data],
+    )
+
+    # Both shapes: a test target can be the crate under mutation for one
+    # `cargo_mutants_test` and an integration suite rebuilt for another.
     return [
         CargoMutantsInfo(
             mutants_json = mutants_json,
             manifest = manifest,
-            inputs = depset(
-                [mutants_json, manifest, env_file, toolchain.process_wrapper] + args_files,
-                transitive = [compile_inputs, crate.srcs, crate.compile_data],
-            ),
+            inputs = inputs,
+        ),
+        CargoMutantsReplayInfo(
+            manifest = replay_manifest,
+            inputs = inputs,
         ),
         OutputGroupInfo(cargo_mutants = depset([mutants_json])),
     ]
@@ -206,7 +269,7 @@ def _cargo_mutants_aspect_impl(target, ctx):
 cargo_mutants_aspect = aspect(
     implementation = _cargo_mutants_aspect_impl,
     doc = "Records mutation-testing inputs for every `rust_test` target it visits.",
-    attr_aspects = [],
+    attr_aspects = ["crate", "deps"],
     fragments = ["cpp"],
     attrs = {
         "_cargo_mutants": attr.label(

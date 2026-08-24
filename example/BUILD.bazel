@@ -79,3 +79,59 @@ rust_test(
     target_compatible_with = NOT_WINDOWS,
     use_libtest_harness = False,
 )
+
+# `scale` is covered only from an integration crate, so the sweep sees nothing
+# without `integration_tests` and everything with it. Both directions are
+# asserted below, which is what keeps the `--extern` rewrite honest: point it at
+# the unmutated rlib and `covered` would pass while `uncovered` also passed.
+rust_library(
+    name = "integration_covered",
+    srcs = ["integration_covered.rs"],
+    crate_name = "integration_covered",
+    edition = "2024",
+)
+
+rust_test(
+    name = "integration_covered_unit_test",
+    crate = ":integration_covered",
+)
+
+rust_test(
+    name = "integration_covered_suite",
+    srcs = ["integration_covered_test.rs"],
+    edition = "2024",
+    deps = [":integration_covered"],
+)
+
+cargo_mutants_test(
+    name = "integration_covered_mutants",
+    timeout = "long",
+    integration_tests = [":integration_covered_suite"],
+    library = ":integration_covered",
+    target_compatible_with = NOT_WINDOWS,
+    test = ":integration_covered_unit_test",
+)
+
+# The same library without the integration suite: every mutant of `scale`
+# survives, which is the behaviour before this feature existed.
+cargo_mutants_test(
+    name = "integration_covered_unit_only_mutants",
+    timeout = "long",
+    tags = ["manual"],
+    target_compatible_with = NOT_WINDOWS,
+    test = ":integration_covered_unit_test",
+)
+
+rust_test(
+    name = "integration_uncovered_failure_test",
+    timeout = "long",
+    srcs = ["expect_missed_mutants.rs"],
+    args = [
+        "$(rootpath :integration_covered_unit_only_mutants)",
+        "MISSED integration_covered.rs",
+    ],
+    data = [":integration_covered_unit_only_mutants"],
+    edition = "2024",
+    target_compatible_with = NOT_WINDOWS,
+    use_libtest_harness = False,
+)

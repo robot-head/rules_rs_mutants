@@ -2,7 +2,7 @@
 
 load("@hermetic_launcher//launcher:lib.bzl", "launcher")
 load("//mutants/private:aspect.bzl", _cargo_mutants_aspect = "cargo_mutants_aspect")
-load("//mutants/private:providers.bzl", "CargoMutantsInfo")
+load("//mutants/private:providers.bzl", "CargoMutantsInfo", "CargoMutantsReplayInfo")
 
 cargo_mutants_aspect = _cargo_mutants_aspect
 
@@ -15,6 +15,13 @@ def _declare_test_executable(ctx):
 def _cargo_mutants_test_impl(ctx):
     info = ctx.attr.test[CargoMutantsInfo]
 
+    # The library the integration tests link, recorded so a mutated rlib can be
+    # produced, and one replay per integration binary that links it.
+    library = ctx.attr.library[CargoMutantsReplayInfo] if ctx.attr.library else None
+    integration = [test[CargoMutantsReplayInfo] for test in ctx.attr.integration_tests]
+    if integration and not library:
+        fail("integration_tests needs `library` set to the rust_library they link")
+
     embedded_args, transformed_args = launcher.args_from_entrypoint(ctx.executable._runner)
     embedded_args.extend([
         "@" + info.manifest.path,
@@ -23,6 +30,13 @@ def _cargo_mutants_test_impl(ctx):
         "--jobs",
         str(ctx.attr.jobs),
     ])
+    # Only when a suite needs it: passing it otherwise would rebuild the rlib
+    # for every mutant, and a failure in that unused build would be reported as
+    # the mutant being unviable -- changing unit-only results for no reason.
+    if integration:
+        embedded_args.extend(["--library-replay", library.manifest.path])
+    for replay in integration:
+        embedded_args.extend(["--integration-replay", replay.manifest.path])
 
     executable = _declare_test_executable(ctx)
     launcher.compile_stub(
@@ -36,9 +50,14 @@ def _cargo_mutants_test_impl(ctx):
     # the runfiles root; the runner chdirs there and replays it with no rewriting.
     runfiles = ctx.runfiles(
         files = [ctx.executable._runner] + ctx.files.data,
-        root_symlinks = {file.path: file for file in info.inputs.to_list()},
+        root_symlinks = {
+            file.path: file
+            for replay in [info] + ([library] if library else []) + integration
+            for file in replay.inputs.to_list()
+        },
     ).merge_all(
         [ctx.attr.test[DefaultInfo].default_runfiles, ctx.attr._runner[DefaultInfo].default_runfiles] +
+        [test[DefaultInfo].default_runfiles for test in ctx.attr.integration_tests] +
         [data[DefaultInfo].default_runfiles for data in ctx.attr.data],
     )
 
@@ -77,8 +96,23 @@ crate.annotation(crate = "cargo-mutants", gen_binaries = ["cargo-mutants"])
 build --@rules_rs_mutants//mutants:cargo_mutants_binary=@crates//:cargo-mutants__cargo-mutants
 ```
 
-Only the test target's own `#[cfg(test)]` tests run against each mutant;
-separate integration-test crates are not rebuilt.
+By default only the test target's own `#[cfg(test)]` tests run against each
+mutant. To let suites under `tests/` catch mutants too, name the library they
+link and the suites themselves:
+
+```python
+cargo_mutants_test(
+    name = "logql_mutants",
+    test = ":logql_test",
+    library = ":logql",
+    integration_tests = [":parser_test", ":planner_test"],
+)
+```
+
+Each mutant then rebuilds the library as an rlib, relinks every listed suite
+against it, and runs them in order, stopping at the first failure. This matters
+more than it sounds: a crate whose parser is covered entirely from `tests/`
+reports almost every mutant as missed without it.
 
 Sweeps are slow — every mutant is a fresh link plus a test run. Use `jobs` to
 fan out within one machine and the standard `shard_count` attribute to fan out
@@ -94,6 +128,23 @@ across several.
 Each job gets its own scratch build tree, so raising this costs disk and
 memory as well as CPU. To spread the work over several machines instead, set
 `shard_count`.""",
+        ),
+        "library": attr.label(
+            aspects = [_cargo_mutants_aspect],
+            providers = [CargoMutantsReplayInfo],
+            doc = """The `rust_library` the `integration_tests` link.
+
+Recorded so each mutant can be rebuilt as an rlib for them to link against.
+Required when `integration_tests` is set, ignored otherwise.""",
+        ),
+        "integration_tests": attr.label_list(
+            aspects = [_cargo_mutants_aspect],
+            providers = [CargoMutantsReplayInfo],
+            doc = """`rust_test` targets under `tests/` to run against each mutant.
+
+Listed explicitly rather than discovered, so a suite that needs a container or a
+network fixture is not pulled into the sweep by accident, and so the cost of
+adding one is visible at the call site.""",
         ),
         "test": attr.label(
             mandatory = True,

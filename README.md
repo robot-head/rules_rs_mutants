@@ -33,7 +33,7 @@ schema is the integration contract here, and it carries no stability guarantee.
 ```bzl
 # MODULE.bazel
 bazel_dep(name = "rules_rs", version = "0.0.106")
-bazel_dep(name = "rules_rs_mutants", version = "0.1.0")
+bazel_dep(name = "rules_rs_mutants", version = "0.1.1")
 ```
 
 Bring your own `cargo-mutants` binary. It is used only to enumerate mutants, so
@@ -154,7 +154,7 @@ bazel test //...
 ## Releasing
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.1.1 && git push origin v0.1.1
 ```
 
 That runs the tests, builds the source archive, cuts the GitHub release, and

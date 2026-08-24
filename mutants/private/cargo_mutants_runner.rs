@@ -71,6 +71,7 @@ struct ReplayManifest {
     srcs: Vec<PathBuf>,
     compile_data: Vec<PathBuf>,
     test_args: Vec<String>,
+    test_env: Vec<(String, String)>,
 }
 
 fn parse_replay_manifest(path: &Path) -> Result<ReplayManifest, String> {
@@ -84,6 +85,7 @@ fn parse_replay_manifest(path: &Path) -> Result<ReplayManifest, String> {
     let mut srcs = Vec::new();
     let mut compile_data = Vec::new();
     let mut test_args = Vec::new();
+    let mut test_env = Vec::new();
 
     let mut lines = text.lines();
     while let Some(flag) = lines.next() {
@@ -99,6 +101,12 @@ fn parse_replay_manifest(path: &Path) -> Result<ReplayManifest, String> {
             "--src" => srcs.push(PathBuf::from(value)),
             "--compile-data" => compile_data.push(PathBuf::from(value)),
             "--test-arg" => test_args.push(value.to_owned()),
+            "--test-env" => {
+                let (key, value) = value
+                    .split_once('=')
+                    .ok_or_else(|| format!("malformed --test-env {value:?}"))?;
+                test_env.push((key.to_owned(), value.to_owned()));
+            }
             other => return Err(format!("unknown flag {other} in {}", path.display())),
         }
     }
@@ -112,6 +120,7 @@ fn parse_replay_manifest(path: &Path) -> Result<ReplayManifest, String> {
         srcs,
         compile_data,
         test_args,
+        test_env,
     })
 }
 
@@ -302,6 +311,7 @@ struct Replay {
     env: Vec<(String, String)>,
     binary: PathBuf,
     test_args: Vec<String>,
+    test_env: Vec<(String, String)>,
     test_working_dir: PathBuf,
 }
 
@@ -326,6 +336,7 @@ impl Replay {
     fn run_tests(&self, timeout: Duration) -> Result<Option<i32>, String> {
         let child = Command::new(&self.binary)
             .args(&self.test_args)
+            .envs(self.test_env.iter().map(|(key, value)| (key, value)))
             .current_dir(&self.test_working_dir)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -426,6 +437,7 @@ fn prepare(
     }
     Ok(Replay {
         runnable: true,
+        test_env: Vec::new(),
         process_wrapper: manifest.process_wrapper.clone(),
         argv,
         env: environment.to_vec(),
@@ -522,6 +534,7 @@ fn prepare_replay(
 
     Ok(Replay {
         runnable: relink.is_some(),
+        test_env: replay.test_env.clone(),
         process_wrapper: replay.process_wrapper.clone(),
         argv,
         env: environment,
@@ -580,23 +593,23 @@ fn evaluate(
     if extra_built.iter().any(Result::is_err) {
         return Ok(Outcome::Unviable);
     }
-    // Stop at the first suite that fails: most mutants die in the unit tests,
-    // and running the rest only to confirm costs the whole matrix per mutant.
+    // The unit tests run first and the suites only if they pass: most mutants
+    // die in the unit tests, and reaching for a suite costs a whole extra run.
+    if replay.run_tests(timeout)? != Some(0) {
+        return Ok(Outcome::Caught);
+    }
     for stage in extra.iter().filter(|stage| stage.runnable) {
         if stage.run_tests(timeout)? != Some(0) {
             return Ok(Outcome::Caught);
         }
     }
-    if replay.run_tests(timeout)? == Some(0) {
-        Ok(Outcome::Missed(format!(
-            "{file}:{}:{}: replace {} with {replacement}",
-            start.0,
-            start.1,
-            mutant["function"]["function_name"].as_str().unwrap_or("?"),
-        )))
-    } else {
-        Ok(Outcome::Caught)
-    }
+    // Nothing failed, so nothing noticed the change.
+    Ok(Outcome::Missed(format!(
+        "{file}:{}:{}: replace {} with {replacement}",
+        start.0,
+        start.1,
+        mutant["function"]["function_name"].as_str().unwrap_or("?"),
+    )))
 }
 
 fn run() -> Result<(), String> {
@@ -706,14 +719,6 @@ fn run() -> Result<(), String> {
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    // The library stage produces an rlib, not a test binary: building it is the
-    // baseline check, and running it would be meaningless.
-    for stage in extras.first().into_iter().flatten() {
-        if let Err(stderr) = stage.build()? {
-            return Err(format!("an unmutated integration stage failed to build:\n{stderr}"));
-        }
-    }
-
     if let Err(stderr) = replays[0].build()? {
         return Err(format!("the unmutated crate failed to build:\n{stderr}"));
     }
@@ -722,7 +727,37 @@ fn run() -> Result<(), String> {
         Some(0) => {}
         _ => return Err("the unmutated tests do not pass; fix them first".to_owned()),
     }
-    let timeout = (started.elapsed() * manifest.timeout_multiplier).max(MIN_TIMEOUT);
+    let mut baseline = started.elapsed();
+
+    // Every integration stage is built, and every runnable one is also run
+    // unmutated. Both halves matter. A suite that already fails would fail
+    // against every mutant too, and each would be recorded as caught -- a
+    // perfect score reported by a broken sweep. And the timeout is derived from
+    // the slowest baseline rather than the unit binary's alone, because a suite
+    // that legitimately runs longer than the unit tests would otherwise be
+    // killed on every mutant and counted as catching it.
+    for stage in extras.first().into_iter().flatten() {
+        if let Err(stderr) = stage.build()? {
+            return Err(format!(
+                "an unmutated integration stage failed to build:\n{stderr}"
+            ));
+        }
+        if !stage.runnable {
+            continue;
+        }
+        let started = Instant::now();
+        match stage.run_tests(BASELINE_TIMEOUT)? {
+            Some(0) => {}
+            _ => {
+                return Err(format!(
+                    "the unmutated integration suite {} does not pass; fix it first",
+                    stage.binary.display()
+                ));
+            }
+        }
+        baseline = baseline.max(started.elapsed());
+    }
+    let timeout = (baseline * manifest.timeout_multiplier).max(MIN_TIMEOUT);
 
     let next = AtomicUsize::new(0);
     let outcomes: Mutex<Vec<Outcome>> = Mutex::new(Vec::new());

@@ -189,8 +189,26 @@ def _write_replay_manifest(ctx, crate, toolchain, args_files, env_file):
         [ctx.expand_location(arg, targets = getattr(ctx.rule.attr, "data", [])) for arg in getattr(ctx.rule.attr, "args", [])],
         before_each = "--test-arg",
     )
+
+    # A suite's own `env`. The runner spawns it as a child of a process holding
+    # the *primary* test's environment, so without this a suite that needs a
+    # variable runs without it and fails against every mutant -- each of which
+    # would then be recorded as caught.
+    run_env = target_run_env(ctx)
+    args.add_all(
+        ["{}={}".format(key, run_env[key]) for key in sorted(run_env)],
+        before_each = "--test-env",
+    )
     ctx.actions.write(out, args)
     return out
+
+def target_run_env(ctx):
+    """The `env` a test rule declares, expanded the way the rule itself does."""
+    data = getattr(ctx.rule.attr, "data", [])
+    return {
+        key: ctx.expand_location(value, targets = data)
+        for key, value in getattr(ctx.rule.attr, "env", {}).items()
+    }
 
 def _record(ctx, crate, toolchain):
     """The rustc command line for `crate`, split into the files the replay reads."""

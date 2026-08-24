@@ -154,7 +154,7 @@ bazel test //...
 ## Releasing
 
 ```bash
-git tag v0.0.2 && git push origin v0.0.2
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
 That runs the tests, builds the source archive, cuts the GitHub release, and

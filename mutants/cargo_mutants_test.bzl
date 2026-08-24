@@ -30,7 +30,10 @@ def _cargo_mutants_test_impl(ctx):
         "--jobs",
         str(ctx.attr.jobs),
     ])
-    if library:
+    # Only when a suite needs it: passing it otherwise would rebuild the rlib
+    # for every mutant, and a failure in that unused build would be reported as
+    # the mutant being unviable -- changing unit-only results for no reason.
+    if integration:
         embedded_args.extend(["--library-replay", library.manifest.path])
     for replay in integration:
         embedded_args.extend(["--integration-replay", replay.manifest.path])

@@ -134,6 +134,50 @@ cargo_mutants_test(
     test = ":integration_covered_unit_test",
 )
 
+# A mutant caught by unit tests must never reach the integration relink. The
+# suite deliberately stops compiling when `guarded` is mutated, so an eager
+# relink reports the mutant as unviable instead of caught.
+rust_library(
+    name = "unit_first",
+    srcs = ["unit_first.rs"],
+    crate_name = "unit_first",
+    edition = "2024",
+)
+
+rust_test(
+    name = "unit_first_test",
+    crate = ":unit_first",
+)
+
+rust_test(
+    name = "unit_first_suite",
+    srcs = ["unit_first_test.rs"],
+    edition = "2024",
+    deps = [":unit_first"],
+)
+
+cargo_mutants_test(
+    name = "unit_first_mutants",
+    integration_tests = [":unit_first_suite"],
+    library = ":unit_first",
+    tags = ["manual"],
+    target_compatible_with = NOT_WINDOWS,
+    test = ":unit_first_test",
+)
+
+rust_test(
+    name = "unit_first_mutants_output_test",
+    srcs = ["expect_mutants_output.rs"],
+    args = [
+        "$(rootpath :unit_first_mutants)",
+        "caught, 0 missed, 0 unviable",
+    ],
+    data = [":unit_first_mutants"],
+    edition = "2024",
+    target_compatible_with = NOT_WINDOWS,
+    use_libtest_harness = False,
+)
+
 rust_test(
     name = "integration_uncovered_failure_test",
     timeout = "long",

@@ -348,16 +348,32 @@ impl Replay {
         })
     }
 
-    fn run_tests(&self, timeout: Duration) -> Result<Option<i32>, String> {
-        let child = Command::new(&self.binary)
+    fn run_tests(&self, timeout: Duration, verbose: bool) -> Result<Option<i32>, String> {
+        let mut command = Command::new(&self.binary);
+        command
             .args(&self.test_args)
             .envs(self.test_env.iter().map(|(key, value)| (key, value)))
-            .current_dir(&self.test_working_dir)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .current_dir(&self.test_working_dir);
+        if verbose {
+            command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+        } else {
+            command.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+        let child = command
             .spawn()
             .map_err(|err| format!("failed to run {}: {err}", self.binary.display()))?;
         wait_with_timeout(child, timeout)
+    }
+
+    fn remove_binary(&self) -> Result<(), String> {
+        match fs::remove_file(&self.binary) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(format!(
+                "failed to remove {}: {err}",
+                self.binary.display()
+            )),
+        }
     }
 }
 
@@ -559,6 +575,45 @@ fn prepare_replay(
     })
 }
 
+fn evaluate_inner(
+    replay: &Replay,
+    extra: &[Replay],
+    file: &str,
+    start: (usize, usize),
+    mutant: &serde_json::Value,
+    timeout: Duration,
+) -> Result<Outcome, String> {
+    let built = replay.build()?;
+    if built.is_err() {
+        return Ok(Outcome::Unviable);
+    }
+    // The unit tests run first and the suites only if they pass: most mutants
+    // die here, before an integration binary needs to be relinked at all.
+    if replay.run_tests(timeout, false)? != Some(0) {
+        return Ok(Outcome::Caught);
+    }
+
+    for stage in extra {
+        if stage.build()?.is_err() {
+            return Ok(Outcome::Unviable);
+        }
+        if stage.runnable && stage.run_tests(timeout, false)? != Some(0) {
+            return Ok(Outcome::Caught);
+        }
+        if stage.runnable {
+            stage.remove_binary()?;
+        }
+    }
+    // Nothing failed, so nothing noticed the change.
+    Ok(Outcome::Missed(format!(
+        "{file}:{}:{}: replace {} with {}",
+        start.0,
+        start.1,
+        mutant["function"]["function_name"].as_str().unwrap_or("?"),
+        mutant["replacement"].as_str().unwrap_or("?"),
+    )))
+}
+
 fn evaluate(
     replay: &Replay,
     extra: &[Replay],
@@ -589,42 +644,13 @@ fn evaluate(
         .ok_or_else(|| format!("mutant names {file}, which is not a source of this crate"))?;
     let path = scratch.join(file);
     write(&path, &span_replace(source, start, end, replacement))?;
-    let built = replay.build()?;
-    // Each extra stage links the mutated rlib, so all of them have to be built
-    // while the mutated source is still on disk.
-    let extra_built = if built.is_ok() {
-        extra.iter().map(Replay::build).collect::<Result<Vec<_>, _>>()?
-    } else {
-        Vec::new()
-    };
+    let outcome = evaluate_inner(replay, extra, file, start, mutant, timeout);
     write(&path, source)?;
-
-    if built.is_err() {
-        return Ok(Outcome::Unviable);
+    replay.remove_binary()?;
+    for stage in extra {
+        stage.remove_binary()?;
     }
-    // A stage that fails to compile against the mutated library is unviable in
-    // the same sense the primary build is: the mutant never produced a program
-    // to run, so it says nothing about the tests.
-    if extra_built.iter().any(Result::is_err) {
-        return Ok(Outcome::Unviable);
-    }
-    // The unit tests run first and the suites only if they pass: most mutants
-    // die in the unit tests, and reaching for a suite costs a whole extra run.
-    if replay.run_tests(timeout)? != Some(0) {
-        return Ok(Outcome::Caught);
-    }
-    for stage in extra.iter().filter(|stage| stage.runnable) {
-        if stage.run_tests(timeout)? != Some(0) {
-            return Ok(Outcome::Caught);
-        }
-    }
-    // Nothing failed, so nothing noticed the change.
-    Ok(Outcome::Missed(format!(
-        "{file}:{}:{}: replace {} with {replacement}",
-        start.0,
-        start.1,
-        mutant["function"]["function_name"].as_str().unwrap_or("?"),
-    )))
+    outcome
 }
 
 fn run() -> Result<(), String> {
@@ -738,7 +764,7 @@ fn run() -> Result<(), String> {
         return Err(format!("the unmutated crate failed to build:\n{stderr}"));
     }
     let started = Instant::now();
-    match replays[0].run_tests(BASELINE_TIMEOUT)? {
+    match replays[0].run_tests(BASELINE_TIMEOUT, true)? {
         Some(0) => {}
         _ => return Err("the unmutated tests do not pass; fix them first".to_owned()),
     }
@@ -761,7 +787,7 @@ fn run() -> Result<(), String> {
             continue;
         }
         let started = Instant::now();
-        match stage.run_tests(BASELINE_TIMEOUT)? {
+        match stage.run_tests(BASELINE_TIMEOUT, true)? {
             Some(0) => {}
             _ => {
                 return Err(format!(
@@ -771,6 +797,10 @@ fn run() -> Result<(), String> {
             }
         }
         baseline = baseline.max(started.elapsed());
+        stage.remove_binary()?;
+    }
+    for stage in extras.first().into_iter().flatten() {
+        stage.remove_binary()?;
     }
     let timeout = (baseline * manifest.timeout_multiplier).max(MIN_TIMEOUT);
 

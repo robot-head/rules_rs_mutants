@@ -106,10 +106,9 @@ cargo_mutants_test(
 )
 ```
 
-Each mutant then rebuilds the library as an rlib, relinks every listed suite
-against it, and runs them in order, stopping at the first failure -- most
-mutants die in the unit tests, and running the rest only to confirm costs the
-whole matrix per mutant.
+Each mutant runs the unit tests first. Only survivors rebuild the library as an
+rlib; the listed suites are then relinked, run, and discarded one at a time,
+stopping at the first failure.
 
 The difference is not marginal. `crabka-logql`'s parser is covered entirely from
 `tests/`, and its `syntax.rs` reports **165 survivors** on unit tests alone

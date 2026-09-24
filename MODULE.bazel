@@ -4,7 +4,7 @@ module(
     bazel_compatibility = [">=7.7.0"],
 )
 
-bazel_dep(name = "rules_rs", version = "0.0.107")
+bazel_dep(name = "rules_rs", version = "0.0.112")
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
 bazel_dep(name = "hermetic_launcher", version = "0.0.15")
 bazel_dep(name = "platforms", version = "1.1.0")

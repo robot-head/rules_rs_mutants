@@ -25,6 +25,10 @@ jobs:
     with:
       release_files: rules_rs_mutants-*.tar.gz
       prerelease: false
+      # The repo has immutable releases on, and publishing attaches the
+      # registry entry's attestations to the release, so it stays a draft
+      # until `publish` is done and `finalize` below publishes it.
+      draft: true
       tag_name: ${{ inputs.tag_name || github.ref_name }}
 
   publish:
@@ -34,3 +38,12 @@ jobs:
       tag_name: ${{ inputs.tag_name || github.ref_name }}
     secrets:
       publish_token: ${{ secrets.BCR_PUBLISH_TOKEN }}
+
+  finalize:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag_name || github.ref_name }}

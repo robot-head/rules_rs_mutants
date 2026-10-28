@@ -47,11 +47,13 @@ jobs:
       # with the build itself passing either way.
       - name: report output group honours changed lines
         run: |
+          # Bazel relays the action's own output to stdout, so keep it out of
+          # the captured report.
           report() {
             bazel build //example:under_tested_test \
               --aspects=//mutants:cargo_mutants_test.bzl%cargo_mutants_aspect \
               --output_groups=cargo_mutants_report \
-              --@//mutants:changed_lines_spec="{\"files\": {\"example/under_tested.rs\": [[$1, $2]]}}"
+              --@//mutants:changed_lines_spec="{\"files\": {\"example/under_tested.rs\": [[$1, $2]]}}" >&2
             cat bazel-bin/example/under_tested_test.mutants.report.json
           }
           double="$(report 1 3)"

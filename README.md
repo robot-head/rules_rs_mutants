@@ -32,7 +32,7 @@ schema is the integration contract here, and it carries no stability guarantee.
 
 ```bzl
 # MODULE.bazel
-bazel_dep(name = "rules_rs", version = "0.0.106")
+bazel_dep(name = "rules_rs", version = "0.1.3")
 bazel_dep(name = "rules_rs_mutants", version = "0.1.1")
 ```
 

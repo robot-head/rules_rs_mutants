@@ -84,6 +84,36 @@ bazel build //... \
   --output_groups=cargo_mutants
 ```
 
+## Reports and changed lines
+
+The `cargo_mutants_report` output group runs the mutants as well, as one build
+action per `rust_test` target, and writes `<name>.mutants.report.json` next to
+it:
+
+```bash
+bazel build //pkg:pkg_test \
+  --aspects=@rules_rs_mutants//mutants:cargo_mutants_test.bzl%cargo_mutants_aspect \
+  --output_groups=+cargo_mutants_report \
+  --@rules_rs_mutants//mutants:changed_lines_spec='{"files": {"pkg/lib.rs": [[12, 15]]}}'
+```
+
+```json
+{"mutants": [
+  {"file": "pkg/lib.rs", "line": 13, "column": 5, "genre": "BinaryOperator",
+   "description": "replace + with - in add", "outcome": "missed"}
+]}
+```
+
+`outcome` is `caught`, `timeout`, `unviable` or `missed`. A missed mutant does
+not fail the action: Bazel discards a failed action's outputs, report included,
+so the report is where a tool reads the result.
+
+`changed_lines_spec` keeps only the mutants whose span touches one of the listed
+lines, keyed by workspace path. It is meant to be written by a tool that diffs
+against a base revision, since an action cannot see git. Left empty, every
+mutant runs. `//mutants:jobs` and `//mutants:timeout_multiplier` stand in for
+the `cargo_mutants_test` attributes of the same names.
+
 ## How it works
 
 The aspect records the crate's `rustc --test` command line in `short_path` form

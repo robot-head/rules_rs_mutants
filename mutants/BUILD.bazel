@@ -1,3 +1,5 @@
+load("@bazel_skylib//rules:common_settings.bzl", "int_flag", "string_flag")
+
 package(default_visibility = ["//visibility:private"])
 
 # ponytail: a label_flag, not a toolchain — one target, no registration. Promote
@@ -22,5 +24,32 @@ label_flag(
 label_flag(
     name = "config",
     build_setting_default = "//mutants/private:empty_mutants.toml",
+    visibility = ["//visibility:public"],
+)
+
+# The lines the `cargo_mutants_report` output group mutates: only mutants whose
+# span touches one of them are tested. JSON, keyed by workspace path:
+#
+#     {"files": {"src/lib.rs": [[12, 15], [40, 40]]}}
+#
+# Meant to be written by a tool that diffs against a base revision, since an
+# action cannot see git. Empty tests every mutant.
+string_flag(
+    name = "changed_lines_spec",
+    build_setting_default = "",
+    visibility = ["//visibility:public"],
+)
+
+# What `cargo_mutants_test`'s attributes of the same names set, for the
+# `cargo_mutants_report` output group, which has no target to carry them.
+int_flag(
+    name = "jobs",
+    build_setting_default = 1,
+    visibility = ["//visibility:public"],
+)
+
+int_flag(
+    name = "timeout_multiplier",
+    build_setting_default = 5,
     visibility = ["//visibility:public"],
 )

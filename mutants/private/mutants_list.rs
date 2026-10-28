@@ -76,7 +76,11 @@ fn copy_into(root: &Path, src: &Path) -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
     }
-    fs::copy(src, &dest).map(|_| ()).map_err(|err| {
+    // Not fs::copy, which carries the source's mode over: Bazel inputs are
+    // read-only under remote execution, and a read-only copy cannot be
+    // overwritten when the same file is copied in twice.
+    let bytes = fs::read(src).map_err(|err| format!("failed to read {}: {err}", src.display()))?;
+    fs::write(&dest, bytes).map_err(|err| {
         format!(
             "failed to copy {} to {}: {err}",
             src.display(),
@@ -126,7 +130,10 @@ fn run() -> Result<(), String> {
     for src in &args.srcs {
         copy_into(&root, src)?;
     }
-    copy_into(&root, &args.crate_root)?;
+    // The crate root is usually among the sources already.
+    if !args.srcs.contains(&args.crate_root) {
+        copy_into(&root, &args.crate_root)?;
+    }
     write_manifest(&root, &args)?;
 
     let path = match env::var_os("PATH") {

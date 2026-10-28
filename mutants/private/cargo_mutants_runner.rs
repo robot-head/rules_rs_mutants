@@ -391,7 +391,11 @@ fn copy(path: &Path, dest: &Path) -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
     }
-    fs::copy(path, dest).map(|_| ()).map_err(|err| {
+    // Not fs::copy, which carries the source's mode over: Bazel inputs are
+    // read-only under remote execution, and the scratch copies are written to.
+    let bytes =
+        fs::read(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    fs::write(dest, bytes).map_err(|err| {
         format!(
             "failed to copy {} to {}: {err}",
             path.display(),

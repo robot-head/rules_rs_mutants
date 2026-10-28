@@ -301,15 +301,20 @@ def _runfiles_path(file, workspace_name):
         return file.short_path[len("../"):]
     return workspace_name + "/" + file.short_path
 
-def _runfiles_listing(ctx, runfiles):
+def _runfiles_listing(ctx, default_info):
     """`<runfiles path> <exec path>` lines rebuilding a test's runfiles tree."""
+    runfiles = default_info.default_runfiles
     entries = {_runfiles_path(f, ctx.workspace_name): f.path for f in runfiles.files.to_list()}
     for link in runfiles.symlinks.to_list():
         entries[ctx.workspace_name + "/" + link.path] = link.target_file.path
     for link in runfiles.root_symlinks.to_list():
         entries[link.path] = link.target_file.path
     inputs = [link.target_file for link in runfiles.symlinks.to_list() + runfiles.root_symlinks.to_list()]
-    repo_mapping = getattr(runfiles, "repo_mapping_manifest", None)
+
+    # The runfiles libraries resolve apparent repository names through it. It
+    # hangs off the executable, not the runfiles object.
+    files_to_run = getattr(default_info, "files_to_run", None)
+    repo_mapping = getattr(files_to_run, "repo_mapping_manifest", None) if files_to_run else None
     if repo_mapping:
         entries["_repo_mapping"] = repo_mapping.path
         inputs.append(repo_mapping)
@@ -324,7 +329,7 @@ def _report(ctx, target, crate, manifest, inputs):
     outputs, and the report is the point.
     """
     report = ctx.actions.declare_file(ctx.label.name + ".mutants.report.json")
-    listing, runfiles = _runfiles_listing(ctx, target[DefaultInfo].default_runfiles)
+    listing, runfiles = _runfiles_listing(ctx, target[DefaultInfo])
     changed_lines = ctx.actions.declare_file(ctx.label.name + ".mutants.changed_lines.json")
     ctx.actions.write(changed_lines, _changed_lines(ctx, crate))
 

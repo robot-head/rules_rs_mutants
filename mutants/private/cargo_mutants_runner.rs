@@ -850,15 +850,42 @@ fn stage_runfiles(
     ])
 }
 
+/// Creates a new directory under `parent` that no other process can have.
+///
+/// Not named by pid alone: the Linux sandbox runs each action in its own pid
+/// namespace, so concurrent actions sharing a temporary directory can have the
+/// same pid, and one would delete the other's scratch tree. `create_dir` fails
+/// on a name that exists, so whichever process creates a name owns it.
+fn unique_dir(parent: &Path, prefix: &str) -> Result<PathBuf, String> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    for attempt in 0u32..1000 {
+        let dir = parent.join(format!("{prefix}.{}.{nanos}.{attempt}", std::process::id()));
+        match fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(format!("failed to create {}: {err}", dir.display())),
+        }
+    }
+    Err(format!(
+        "no free scratch directory under {}",
+        parent.display()
+    ))
+}
+
 fn run() -> Result<(), String> {
     let (shard_index, shard_total) = shard()?;
-    // A build action has no TEST_TMPDIR. Its sandbox gives each action a
-    // private temporary directory, and the pid keeps unsandboxed ones apart.
+    // A test's TEST_TMPDIR is its own. A build action has none, and the
+    // temporary directory it gets can be shared with other actions.
     let scratch = match env::var_os("TEST_TMPDIR") {
-        Some(dir) => PathBuf::from(dir).join("cargo_mutants"),
-        None => env::temp_dir().join(format!("cargo_mutants.{}", std::process::id())),
+        Some(dir) => {
+            let scratch = PathBuf::from(dir).join("cargo_mutants");
+            let _ = fs::remove_dir_all(&scratch);
+            scratch
+        }
+        None => unique_dir(&env::temp_dir(), "cargo_mutants")?,
     };
-    let _ = fs::remove_dir_all(&scratch);
 
     // As a build action the working directory is already the exec root, which
     // the recorded command line is relative to. As a test it is the runfiles
@@ -1153,6 +1180,18 @@ mod tests {
     #[test]
     fn replaces_at_end_of_input() {
         assert_eq!(span_replace("ab", (1, 3), (1, 3), "c"), "abc");
+    }
+
+    #[test]
+    fn scratch_directories_are_never_shared() {
+        let parent =
+            std::env::temp_dir().join(format!("cargo_mutants_unique_test.{}", std::process::id()));
+        std::fs::create_dir_all(&parent).unwrap();
+        let a = super::unique_dir(&parent, "x").unwrap();
+        let b = super::unique_dir(&parent, "x").unwrap();
+        assert_ne!(a, b);
+        assert!(a.is_dir() && b.is_dir());
+        std::fs::remove_dir_all(parent).unwrap();
     }
 
     #[test]

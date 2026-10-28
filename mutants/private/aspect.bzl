@@ -10,9 +10,20 @@ test time:
   2. The exact `rustc --test` command line rules_rust itself would run, split
      into the same `Args` objects `rustc_compile` passes to `ctx.actions.run`.
      Replaying it verbatim is why the runner mirrors exec paths into runfiles.
+
+The `cargo_mutants_report` output group runs that loop as a build action
+instead of a test, writing `<name>.mutants.report.json`, and honours
+`//mutants:changed_lines_spec`. It is for a tool that applies this aspect from
+the command line and reads the reports back, with no BUILD edits:
+
+    bazel build //pkg:pkg_test \
+      --aspects=@rules_rs_mutants//mutants:cargo_mutants_test.bzl%cargo_mutants_aspect \
+      --output_groups=+cargo_mutants_report \
+      --@rules_rs_mutants//mutants:changed_lines_spec='{"files": {...}}'
 """
 
 load("@bazel_skylib//lib:structs.bzl", "structs")
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 
 # Reaching into rules_rust's internals is the whole point: the replayed command
 # line has to be the one rules_rust would have run, not an approximation of it.
@@ -251,6 +262,8 @@ def _cargo_mutants_aspect_impl(target, ctx):
         transitive = [compile_inputs, crate.srcs, crate.compile_data],
     )
 
+    report = _report(ctx, target, crate, manifest, inputs)
+
     # Both shapes: a test target can be the crate under mutation for one
     # `cargo_mutants_test` and an integration suite rebuilt for another.
     return [
@@ -263,8 +276,92 @@ def _cargo_mutants_aspect_impl(target, ctx):
             manifest = replay_manifest,
             inputs = inputs,
         ),
-        OutputGroupInfo(cargo_mutants = depset([mutants_json])),
+        OutputGroupInfo(
+            cargo_mutants = depset([mutants_json]),
+            cargo_mutants_report = depset([report]),
+        ),
     ]
+
+def _changed_lines(ctx, crate):
+    """The changed lines in this crate's sources, as the runner reads them.
+
+    Narrowed to the crate so that a change elsewhere leaves the action's inputs,
+    and so its cached report, alone.
+    """
+    spec = ctx.attr._changed_lines_spec[BuildSettingInfo].value
+    if not spec:
+        return ""
+    files = json.decode(spec).get("files", {})
+    ours = {src.path: files[src.path] for src in crate.srcs.to_list() if src.path in files}
+    return json.encode({"files": ours})
+
+def _runfiles_path(file, workspace_name):
+    """Where `file` sits below a runfiles root."""
+    if file.short_path.startswith("../"):
+        return file.short_path[len("../"):]
+    return workspace_name + "/" + file.short_path
+
+def _runfiles_listing(ctx, default_info):
+    """`<runfiles path> <exec path>` lines rebuilding a test's runfiles tree."""
+    runfiles = default_info.default_runfiles
+    entries = {_runfiles_path(f, ctx.workspace_name): f.path for f in runfiles.files.to_list()}
+    for link in runfiles.symlinks.to_list():
+        entries[ctx.workspace_name + "/" + link.path] = link.target_file.path
+    for link in runfiles.root_symlinks.to_list():
+        entries[link.path] = link.target_file.path
+    inputs = [link.target_file for link in runfiles.symlinks.to_list() + runfiles.root_symlinks.to_list()]
+
+    # The runfiles libraries resolve apparent repository names through it. It
+    # hangs off the executable, not the runfiles object.
+    files_to_run = getattr(default_info, "files_to_run", None)
+    repo_mapping = getattr(files_to_run, "repo_mapping_manifest", None) if files_to_run else None
+    if repo_mapping:
+        entries["_repo_mapping"] = repo_mapping.path
+        inputs.append(repo_mapping)
+    out = ctx.actions.declare_file(ctx.label.name + ".mutants.runfiles")
+    ctx.actions.write(out, "".join(["{} {}\n".format(key, entries[key]) for key in sorted(entries)]))
+    return out, depset(inputs, transitive = [runfiles.files])
+
+def _report(ctx, target, crate, manifest, inputs):
+    """Runs the mutation loop as a build action and writes every outcome as JSON.
+
+    The action passes whatever survives: Bazel discards a failed action's
+    outputs, and the report is the point.
+    """
+    report = ctx.actions.declare_file(ctx.label.name + ".mutants.report.json")
+    listing, runfiles = _runfiles_listing(ctx, target[DefaultInfo])
+    changed_lines = ctx.actions.declare_file(ctx.label.name + ".mutants.changed_lines.json")
+    ctx.actions.write(changed_lines, _changed_lines(ctx, crate))
+
+    jobs = ctx.attr._jobs[BuildSettingInfo].value
+    args = ctx.actions.args()
+    args.add("@" + manifest.path)
+    args.add("--report", report)
+    args.add("--changed-lines", changed_lines)
+    args.add("--fail-on-missed", "false")
+    args.add("--runfiles", listing)
+    args.add("--workspace", ctx.workspace_name)
+    args.add("--jobs", str(jobs))
+    args.add("--timeout-multiplier", str(ctx.attr._timeout_multiplier[BuildSettingInfo].value))
+    run_env = target_run_env(ctx)
+    args.add_all(
+        ["{}={}".format(key, run_env[key]) for key in sorted(run_env)],
+        before_each = "--test-env",
+    )
+
+    ctx.actions.run(
+        executable = ctx.executable._runner,
+        arguments = [args],
+        inputs = depset([listing, changed_lines], transitive = [inputs, runfiles]),
+        outputs = [report],
+        mnemonic = "CargoMutants",
+        progress_message = "Mutation testing %{label}",
+        # Each job is a rustc plus a test binary at a time.
+        execution_requirements = {"cpu:" + str(jobs): ""} if jobs > 1 else {},
+        # PATH and HOME, which the replayed rustc and the tests are handed on.
+        use_default_shell_env = True,
+    )
+    return report
 
 cargo_mutants_aspect = aspect(
     implementation = _cargo_mutants_aspect_impl,
@@ -283,6 +380,14 @@ cargo_mutants_aspect = aspect(
         ),
         "_lister": attr.label(
             default = Label("//mutants/private:mutants_list"),
+            executable = True,
+            cfg = "exec",
+        ),
+        "_changed_lines_spec": attr.label(default = Label("//mutants:changed_lines_spec")),
+        "_jobs": attr.label(default = Label("//mutants:jobs")),
+        "_timeout_multiplier": attr.label(default = Label("//mutants:timeout_multiplier")),
+        "_runner": attr.label(
+            default = Label("//mutants/private:cargo_mutants_runner"),
             executable = True,
             cfg = "exec",
         ),

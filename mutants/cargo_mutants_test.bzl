@@ -108,7 +108,7 @@ crate.annotation(crate = "cargo-mutants", gen_binaries = ["cargo-mutants"])
 
 ```
 # .bazelrc
-build --@rules_rs_mutants//mutants:cargo_mutants_binary=@crates//:cargo-mutants__cargo-mutants
+build --@rules_rs_mutants//mutants:cargo_mutants_binary=@crates//cargo-mutants__cargo-mutants
 ```
 
 By default only the test target's own `#[cfg(test)]` tests run against each

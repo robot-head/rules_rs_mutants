@@ -24,7 +24,7 @@ rust_binary(
     srcs = ["cargo_mutants_runner.rs"],
     crate_name = "cargo_mutants_runner",
     edition = "2024",
-    deps = ["@rrsmut//:serde_json"],
+    deps = ["@rrsmut//serde_json"],
 )
 
 rust_test(

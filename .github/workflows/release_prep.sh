@@ -27,6 +27,6 @@ crate.annotation(crate = "cargo-mutants", gen_binaries = ["cargo-mutants"])
 \`\`\`
 
 \`\`\`
-build --@rules_rs_mutants//mutants:cargo_mutants_binary=@crates//:cargo-mutants__cargo-mutants
+build --@rules_rs_mutants//mutants:cargo_mutants_binary=@crates//cargo-mutants__cargo-mutants
 \`\`\`
 EOF

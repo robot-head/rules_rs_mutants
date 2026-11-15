@@ -32,7 +32,7 @@ schema is the integration contract here, and it carries no stability guarantee.
 
 ```bzl
 # MODULE.bazel
-bazel_dep(name = "rules_rs", version = "0.1.3")
+bazel_dep(name = "rules_rs", version = "0.2.4")
 bazel_dep(name = "rules_rs_mutants", version = "0.1.2")
 ```
 
@@ -46,7 +46,7 @@ crate.annotation(crate = "cargo-mutants", gen_binaries = ["cargo-mutants"])
 
 ```
 # .bazelrc
-build --@rules_rs_mutants//mutants:cargo_mutants_binary=@crates//:cargo-mutants__cargo-mutants
+build --@rules_rs_mutants//mutants:cargo_mutants_binary=@crates//cargo-mutants__cargo-mutants
 ```
 
 Vendoring is deliberately not offered: upstream ships **x86_64-only** release

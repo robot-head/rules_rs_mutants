@@ -12,7 +12,7 @@ fn main() {
          crate.annotation(crate = \"cargo-mutants\", gen_binaries = [\"cargo-mutants\"])\n\
          \n\
          # .bazelrc\n\
-         build --@rules_rs_mutants//mutants:cargo_mutants_binary=@crates//:cargo-mutants__cargo-mutants"
+         build --@rules_rs_mutants//mutants:cargo_mutants_binary=@crates//cargo-mutants__cargo-mutants"
     );
     std::process::exit(1);
 }

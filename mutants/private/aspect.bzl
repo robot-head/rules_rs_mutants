@@ -24,6 +24,7 @@ the command line and reads the reports back, with no BUILD edits:
 
 load("@bazel_skylib//lib:structs.bzl", "structs")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
+load("@rules_rust//cargo:cargo_toolchain.bzl", "find_cargo")
 
 # Reaching into rules_rust's internals is the whole point: the replayed command
 # line has to be the one rules_rust would have run, not an approximation of it.
@@ -49,16 +50,18 @@ load(":providers.bzl", "CargoMutantsInfo", "CargoMutantsReplayInfo")
 
 RUST_TOOLCHAIN_TYPE = "@rules_rust//rust:toolchain_type"
 CPP_TOOLCHAIN_TYPE = "@bazel_tools//tools/cpp:toolchain_type"
+CARGO_TOOLCHAIN_TYPE = "@rules_rust//cargo:toolchain_type"
 
 def _enumerate(ctx, crate, toolchain):
     """Emits the action producing `cargo-mutants --list --json` output."""
-    if not toolchain.cargo:
-        fail("cargo_mutants needs a Rust toolchain that provides cargo")
+    cargo = find_cargo(ctx, toolchain)
+    if not cargo.cargo:
+        fail("cargo_mutants needs a cargo_toolchain or a Rust toolchain that provides cargo")
 
     output = ctx.actions.declare_file(ctx.label.name + ".mutants.json")
     args = ctx.actions.args()
     args.add("--cargo-mutants", ctx.executable._cargo_mutants)
-    args.add("--cargo", toolchain.cargo)
+    args.add("--cargo", cargo.cargo)
     args.add("--crate-name", crate.name)
     args.add("--edition", crate.edition)
     args.add("--crate-root", crate.root)
@@ -69,7 +72,7 @@ def _enumerate(ctx, crate, toolchain):
     ctx.actions.run(
         executable = ctx.executable._lister,
         arguments = [args],
-        inputs = depset([toolchain.cargo, ctx.file._config], transitive = [crate.srcs]),
+        inputs = depset([ctx.file._config], transitive = [cargo.files, crate.srcs]),
         tools = [ctx.executable._cargo_mutants],
         outputs = [output],
         mnemonic = "CargoMutantsList",
@@ -392,5 +395,9 @@ cargo_mutants_aspect = aspect(
             cfg = "exec",
         ),
     },
-    toolchains = [RUST_TOOLCHAIN_TYPE, CPP_TOOLCHAIN_TYPE],
+    toolchains = [
+        RUST_TOOLCHAIN_TYPE,
+        CPP_TOOLCHAIN_TYPE,
+        config_common.toolchain_type(CARGO_TOOLCHAIN_TYPE, mandatory = False),
+    ],
 )
